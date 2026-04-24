@@ -1,55 +1,46 @@
 # Quiz Leaderboard Aggregator
 
-Hey there! This is my solution for the Quiz Leaderboard Aggregator assignment. 
+A Java 17 application that polls an external quiz API, deduplicates event data, aggregates scores, and submits a final leaderboard.
 
-The goal of this project was to build a backend Java application that pulls quiz data from an external API, processes the events to filter out duplicates, calculates everyone's total scores, and submits the final leaderboard back to the server. 
+## Overview
 
-## The Challenge
+This project solves a data synchronization problem where an external validator API returns quiz scores across multiple polls. Since the external system may broadcast duplicate events, the application must identify and filter out these duplicates before calculating the final leaderboard to ensure correct scoring.
 
-The tricky part of this assignment wasn't just pulling data from an API—it was dealing with the reality of distributed systems. The validator API I was pulling from simulates a real-world scenario where the same event (like a participant scoring points in a specific round) might get sent multiple times across different network requests.
+## Build & Run
 
-If I just blindly added up every score I received, the totals would be completely wrong. I had to make sure that a specific participant's score for a specific round was only counted **once**, no matter how many times the API sent it to me over the 10 polls.
+### Prerequisites
+* Java 17 or higher
+* Maven 3.8+
 
-## How I Solved It
-
-### 1. Polling the API
-I set up a loop to hit the `GET /quiz/messages` endpoint exactly 10 times. The assignment strictly required a 5-second delay between each poll, so I added a `Thread.sleep(5000)` to ensure I wasn't hammering the server too fast.
-
-### 2. The Deduplication Strategy (The Fun Part)
-To make sure I didn't count duplicate events, I created a composite key made up of the `roundId` and the `participant`. I implemented this using a Java 14+ `record` called `EventKey`. 
-
-The beauty of using a `record` is that Java automatically handles the `equals()` and `hashCode()` methods behind the scenes. This meant I could just toss every incoming event's `EventKey` into a `HashSet`. 
-* If the key was already in the set? It's a duplicate. Ignore it.
-* If the key was new? Add it to the set, and add the score to the participant's running total in a `HashMap`.
-
-This gave me blazing fast O(1) lookups for duplicates without writing a bunch of messy, boilerplate code.
-
-### 3. Sorting and Submitting
-Once all 10 polls finished and the scores were safely aggregated, I converted the map into a list of `LeaderboardEntry` objects. I implemented the `Comparable` interface on this class so it would automatically sort the participants by their total score in descending order (highest score first). 
-
-Finally, I wrapped the sorted leaderboard in a JSON payload and `POST`ed it to the submission endpoint. 
-
----
-
-## How to Run the Project
-
-If you want to run this code yourself, you'll need **Java 17+** and **Maven**. 
-
-### Building the Project
-Open your terminal in the project folder and run:
+### Build
+Build the executable JAR using Maven:
 ```bash
 mvn clean package
 ```
-This will download the required libraries (Jackson for JSON parsing and SLF4J/Logback for logging) and compile everything into a single, executable JAR file in the `target/` directory.
 
-### Running the App
-Once it's built, just run:
+### Run
+Execute the compiled JAR:
 ```bash
 java -jar target/quiz-leaderboard-1.0.0.jar
 ```
-The app will start polling. Since it has to wait 5 seconds between each of the 10 polls, it takes about 50 seconds to finish. You'll see live logs in the console telling you exactly what it's doing, how many events it ingested, and how many duplicates it threw out. 
+*Note: Execution takes ~50 seconds due to a mandatory 5-second delay required between each of the 10 API polls.*
 
-All logs are also saved to `quiz-leaderboard.log` so you can review them later.
+## Architecture & Design Decisions
 
----
-*Built with Java 17 and Maven.*
+### 1. Deduplication Logic
+The API frequently returns duplicate events across different polls. To handle this, the application uses a composite key consisting of `(roundId, participant)`. 
+
+This is implemented using a Java `record` (`EventKey`). Since Java automatically provides `equals()` and `hashCode()` implementations for records, these keys can be safely stored in a `HashSet`. 
+
+When processing an event:
+1. An `EventKey` is generated for the incoming payload.
+2. If `HashSet.add(key)` returns `false`, the event is a duplicate and is immediately discarded.
+3. If it returns `true`, the event is new, and the score is accumulated in a `HashMap`.
+
+This approach guarantees `O(1)` duplicate detection and eliminates boilerplate.
+
+### 2. Resilience & Error Handling
+The `QuizApiClient` utilizes the native Java `HttpClient`. It implements a retry mechanism specifically for HTTP 5xx server errors and network timeouts. The retry backoff is intentionally kept short (1000ms) to ensure the application still respects the strict 5000ms inter-poll delay required by the validator API.
+
+### 3. Sorting
+The leaderboard generation relies on a custom `LeaderboardEntry` class that implements `Comparable`. It automatically sorts participants by their total accumulated score in descending order before generating the final JSON payload.
